@@ -6,5 +6,7 @@ This is basically native RPC accessible over USB or IPC. For USB just run `sysmo
 
 Some of these commands use privileged SVCs which regular apps don't have access to.
 
+Note that as a regular-app, this wouldn't init gfx or handle {exit via HID button}.
+
 ## Credits
 * This uses .py based on rop-rpc.
