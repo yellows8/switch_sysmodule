@@ -460,7 +460,7 @@ Result process_ipc_cmds(IpcParsedCommand *r, u32 *cmdbuf, u32 session_type, u32 
 							break;
 
 							case 3:
-								ipcAddTransferBuffer(&c, r->Buffers[pos2], r->BufferSizes[pos2], tmpval1);
+								ipcAddExchBuffer(&c, r->Buffers[pos2], r->BufferSizes[pos2], tmpval1);
 							break;
 
 							case 4:
