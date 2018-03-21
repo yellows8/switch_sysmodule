@@ -915,7 +915,7 @@ Result ipc_handler()
 
 	static Thread usb_thread;
 
-	ret = threadCreate(&usb_thread, usb_handler, 0, 0x4000, 0x18, -2);
+	ret = threadCreate(&usb_thread, usb_handler, 0, 0x4000, 28, -2);
 	if(R_FAILED(ret))return ret | 4;
 
 	ret = threadStart(&usb_thread);
