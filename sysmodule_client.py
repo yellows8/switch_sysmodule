@@ -429,41 +429,139 @@ class Client():
                 break
         file_out.close()
 
-    def fs_stdio_writefile(self, fspath, file_in, off=0, endsize=0, sz=0x8000):
+    def acc_GetActiveUser(self):
+        res = self.transport_cmd(25, 0, 0, 0, 0, 0, 0, True)
+        if res['rc'] != 0:
+            raise Exception("Cmd failed: 0x%x" % res['rc'])
+        tmp = struct.unpack('<QQB', res['raw'][:0x11])
+        return {
+            'userid': tmp[0] | (tmp[1]<<64),
+            'userid_low': tmp[0],
+            'userid_high': tmp[1],
+            'account_selected': tmp[2],
+        }
+
+    def fs_mount_save(self, device, saveid, userid_low, userid_high, savetype=0): # savetype 0 is regular apps, 1 for SystemSaveData.
+        return self.transport_cmd_inbuf(26, "%s\0" % device, saveid, userid_low, userid_high, savetype)['rc']
+
+    def fs_device_unmount(self, device):
+        return self.transport_cmd_inbuf(27, "%s\0" % device)['rc']
+
+    def fs_device_commit(self, device):
+        return self.transport_cmd_inbuf(28, "%s\0" % device)['rc']
+
+    def fs_dirlist(self, fspath, outsize):
+        res = self.transport_cmd_inbuf_outbuf(29, "%s\0" % fspath, outsize, 0, 0, 0, 0, 0, 0, True)
+        if res['rc'] != 0:
+            raise Exception("Cmd failed: 0x%x" % res['rc'])
+        actual_size = struct.unpack('<Q', res['raw'][0x0:0x0+8])[0]
+        entrysize = struct.unpack('<Q', res['raw'][0x8:0x8+8])[0]
+        data = res['buffers'][1][:actual_size]
+        dirlist = []
+
+        if actual_size >= entrysize:
+            for pos in range(actual_size / entrysize):
+                tmp_pos = pos * entrysize
+                entryname = data[tmp_pos+0x3:tmp_pos+0x3+0x101]
+                endpos = entryname.find('\0')
+                if endpos != -1:
+                    entryname = entryname[:endpos]
+                entrytype = struct.unpack('<B', data[tmp_pos+0x2:tmp_pos+0x2+1])[0]
+
+                entrydata = {
+                    'name': entryname,
+                    'type': entrytype == 8
+                }
+                dirlist.append(entrydata)
+
+        return dirlist
+
+    def fs_ls(self, fspath, outsize=0x100000):
+        dirlist = self.fs_dirlist(fspath, outsize)
+        print "total %u" % (len(dirlist))
+
+        for entry in dirlist:
+            tmptype = 'd'
+            if entry['type'] == True:
+                tmptype = '-'
+
+            try:
+                tmp_stat = self.fs_stat("%s/%s" % (fspath, entry['name']))
+                tmp_size = "%u" % (tmp_stat['size'])
+            except:
+                tmp_size = '-'
+                pass
+
+            print "%s %s %s" % (tmptype, tmp_size, entry['name'])
+
+    def fs_stat(self, fspath):
+        res = self.transport_cmd_inbuf(30, "%s\0" % fspath, 0, 0, 0, 0, 0, 0, True)
+        if res['rc'] != 0:
+            raise Exception("Cmd failed: 0x%x" % res['rc'])
+
+        tmptype = struct.unpack('<I', res['raw'][0x4:0x4+4])[0] & 0170000
+
+        return {
+            'size': struct.unpack('<Q', res['raw'][0x10:0x10+8])[0],
+            'type': tmptype == 0100000, # is-file
+        }
+
+    def fs_stdio_rwfile(self, fspath, host_path, rw_flag, off=0, endsize=0, sz=0x8000):
         reloff = 0
 
-        fspath = "%s\0" % fspath
-
         if endsize==0:
-            endsize = os.path.getsize(file_in)
+            if rw_flag==False:
+                endsize = self.fs_stat(fspath)['size']
+            if rw_flag==True:
+                endsize = os.path.getsize(host_path)
             print "Using file size: 0x%x" % endsize
             endsize-= off
             print "Using endsize: 0x%x" % endsize
 
-        file_in = open(file_in, 'rb')
-        file_in.seek(off)
+        fspath = "%s\0" % fspath
+
+        tmp_mode = 'rb'
         fsmode = 'wb\0'
+        fsmode2 = 'r+b\0'
+        if rw_flag==False:
+            tmp_mode = 'wb'
+            fsmode = 'rb\0'
+            fsmode2 = 'rb\0'
+        host_file = open(host_path, tmp_mode)
+        if rw_flag==True:
+            host_file.seek(off)
+
         while True:
             if endsize-reloff < sz:
                 sz = endsize-reloff
 
-            tmpdata = file_in.read(sz)
+            if off != 0:
+                fsmode = fsmode2
 
-            if off!=0:
-                 fsmode = 'r+b\0'
-
-            res = self.transport_cmd_inbuf_inbuf_inbuf(31, fspath, fsmode, tmpdata, off, 1, 0, 0, 0, 0, True)
+            if rw_flag==False:
+                res = self.transport_cmd_inbuf_inbuf_outbuf(31, fspath, fsmode, sz, off, 0, 0, 0, 0, 0, True)
+            if rw_flag==True:
+                tmpdata = host_file.read(sz)
+                res = self.transport_cmd_inbuf_inbuf_inbuf(31, fspath, fsmode, tmpdata, off, 1, 0, 0, 0, 0, True)
             rc = res['rc']
             if rc != 0:
-                file_in.close()
+                host_file.close()
                 raise Exception('Unknown error 0x%x' % rc)
 
-            off += sz
-            reloff += sz
+            actual_size = struct.unpack('<Q', res['raw'][:0x8])[0]
+
+            if rw_flag==False:
+                host_file.write(res['buffers'][2][:actual_size])
+
+            off += actual_size
+            reloff += actual_size
             if endsize!=0 and reloff >= endsize:
                 print 'Reached end-off OK!'
                 break
-        file_in.close()
+        host_file.close()
+
+    def fs_unlink(self, fspath):
+        return self.transport_cmd_inbuf(32, "%s\0" % fspath)['rc']
 
     # 'buf' params for input buffers are the actual python buffer data(not addrs), while for output buffers these are unused. Output buffers can be accessed via res['buffers'].
     def cmd(self, h, _id,

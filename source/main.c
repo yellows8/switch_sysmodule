@@ -611,10 +611,17 @@ Result process_ipc_cmds(IpcParsedCommand *r, u32 *cmdbuf, u32 session_type, u32 
 		break;
 
 		case 26:
-			if(in_raw_data_insize < 6)return -4;
+			if(in_raw_data_insize < 8)return -4;
 			if(r->NumBuffers==0)return -4;
 
-			ret = fsMount_SaveData(&tmpfs, raw64_in[0], *((u128*)&raw64_in[1]));
+			if(raw64_in[3]==0)
+			{
+				ret = fsMount_SaveData(&tmpfs, raw64_in[0], *((u128*)&raw64_in[1]));
+			}
+			else
+			{
+				ret = fsMount_SystemSaveData(&tmpfs, raw64_in[0]);
+			}
 			if(R_FAILED(ret)) return ret;
 
 			ret = fsdevMountDevice(r->Buffers[0], tmpfs);
@@ -639,7 +646,7 @@ Result process_ipc_cmds(IpcParsedCommand *r, u32 *cmdbuf, u32 session_type, u32 
 			struct dirent *direntry = NULL;
 
 			d = opendir(r->Buffers[0]);
-			if(d==NULL)return -16;
+			if(d==NULL)return errno;//-16;
 
 			u8 *tmp_ptr = r->Buffers[1];
 			tmpsize = r->BufferSizes[1];
