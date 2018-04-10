@@ -63,6 +63,7 @@ void __libnx_initheap(void)
 
 void log_writedata(void* buffer, size_t size)
 {
+	#ifdef ENABLE_LOGGING
 	u8 tmpdata[0x200];
 	u8 *bufptr = buffer;
 	size_t tmpsize;
@@ -80,6 +81,7 @@ void log_writedata(void* buffer, size_t size)
 		size-= tmpsize;
 		bufptr+= tmpsize;
 	}
+	#endif
 }
 
 void log_command(IpcParsedCommand *r, u32 session_type, u32 log_data)
@@ -950,8 +952,10 @@ Result ipc_handler()
 	if(R_FAILED(ret))return ret | 12;
 	}
 
+	#ifdef ENABLE_LOGGING
 	fcmdlog = fopen("/switch_cmdlog.bin", "wb");
 	if(fcmdlog==NULL)fatalSimple(-1);
+	#endif
 
 	while(R_SUCCEEDED(ret = svcWaitSynchronization(&handleindex, handlelist, handlecount, U64_MAX)))
 	{
