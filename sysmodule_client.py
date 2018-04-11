@@ -134,7 +134,7 @@ class Client():
 
         # get an endpoint instance
         self.cfg = self.dev.get_active_configuration()
-        self.intf = self.cfg[(0,0)]
+        self.intf = usb.util.find_descriptor(self.cfg, bInterfaceClass=0xff, bInterfaceSubClass=0xff, bInterfaceProtocol=0xfe)
 
         self.ep_in = usb.util.find_descriptor(
             self.intf,
