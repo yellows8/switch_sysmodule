@@ -38,6 +38,8 @@ u32 vi_sessioncount = 0;
 
 FILE *fcmdlog;
 
+static u32 usb_interface=0;
+
 typedef struct {
 	u32 magic;//0x4d53584e 'NXSM'
 	u32 raw_data_size;
@@ -50,15 +52,15 @@ size_t transport_safe_write(void* buffer, size_t size);
 
 void __libnx_initheap(void)
 {
-    void*  addr = nx_inner_heap;
-    size_t size = nx_inner_heap_size;
+	void*  addr = nx_inner_heap;
+	size_t size = nx_inner_heap_size;
 
-    // Newlib
-    extern char* fake_heap_start;
-    extern char* fake_heap_end;
+	// Newlib
+	extern char* fake_heap_start;
+	extern char* fake_heap_end;
 
-    fake_heap_start = (char*)addr;
-    fake_heap_end   = (char*)addr + size;
+	fake_heap_start = (char*)addr;
+	fake_heap_end   = (char*)addr + size;
 }
 
 void log_writedata(void* buffer, size_t size)
@@ -782,7 +784,7 @@ size_t transport_safe_read(void* buffer, size_t size)
 
 	while(cursize)
 	{
-		tmpsize = usbCommsRead(bufptr, cursize);
+		tmpsize = usbCommsReadEx(bufptr, cursize, usb_interface);
 		bufptr+= tmpsize;
 		cursize-= tmpsize;
 	}
@@ -798,7 +800,7 @@ size_t transport_safe_write(void* buffer, size_t size)
 
 	while(cursize)
 	{
-		tmpsize = usbCommsWrite(bufptr, cursize);
+		tmpsize = usbCommsWriteEx(bufptr, cursize, usb_interface);
 		bufptr+= tmpsize;
 		cursize-= tmpsize;
 	}
@@ -892,21 +894,33 @@ void process_usb_cmd(u32 *stop)
 
 void usb_handler(void* arg)
 {
-    u32 stop=0;
+	u32 stop=0;
 
-    Result ret = usbCommsInitialize();
-    if(R_FAILED(ret)) fatalSimple(ret);
+	Result ret = usbCommsInitializeEx(&usb_interface, USB_CLASS_VENDOR_SPEC, USB_CLASS_VENDOR_SPEC, USB_CLASS_APPLICATION);
+	if(R_FAILED(ret)) fatalSimple(ret);
 
-    while(1)
-    {
-        process_usb_cmd(&stop);
-        if(stop & 0x1)
-        {
-            while(1)svcSleepThread(1000000000);
-        }
-    }
+	while(1)
+	{
+		process_usb_cmd(&stop);
+		if(stop & 0x1)
+		{
+			while(1)svcSleepThread(1000000000);
+		}
+	}
 
-    usbCommsExit();
+	usbCommsExitEx(usb_interface);
+}
+
+void switch_sysmodule_usb_initialize()
+{
+	Result ret=0;
+	static Thread usb_thread;
+
+	ret = threadCreate(&usb_thread, usb_handler, 0, 0x4000, 28, -2);
+	if (R_FAILED(ret)) fatalSimple(ret);
+
+	ret = threadStart(&usb_thread);
+	if (R_FAILED(ret)) fatalSimple(ret);
 }
 
 Result ipc_handler()
@@ -922,13 +936,7 @@ Result ipc_handler()
 
 	handlecount = server_handles;
 
-	static Thread usb_thread;
-
-	ret = threadCreate(&usb_thread, usb_handler, 0, 0x4000, 28, -2);
-	if(R_FAILED(ret))return ret | 4;
-
-	ret = threadStart(&usb_thread);
-	if(R_FAILED(ret))return ret | 6;
+	switch_sysmodule_usb_initialize();
 
 	//ret = svcManageNamedPort(&handlelist[0], "hax", 1);
 	ret = smRegisterService(&handlelist[0], "hax", false, 1);
@@ -1018,6 +1026,7 @@ Result ipc_handler()
 	return ret | 14;
 }
 
+#ifndef ENABLE_SWITCHSYSMODULE
 int main(int argc, char **argv)
 {
 	Result ret=0;
@@ -1028,4 +1037,5 @@ int main(int argc, char **argv)
 
 	return 0;
 }
+#endif
 
