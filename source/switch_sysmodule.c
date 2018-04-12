@@ -938,6 +938,10 @@ Result ipc_handler()
 
 	switch_sysmodule_usb_initialize();
 
+	#ifdef DISABLE_IPC
+	while(1)svcSleepThread(1000000000);
+	#endif
+
 	//ret = svcManageNamedPort(&handlelist[0], "hax", 1);
 	ret = smRegisterService(&handlelist[0], "hax", false, 1);
 	if(R_FAILED(ret))return ret | 8;
