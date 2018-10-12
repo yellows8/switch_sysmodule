@@ -405,11 +405,11 @@ Result process_ipc_cmds(IpcParsedCommand *r, u32 *cmdbuf, u32 session_type, u32 
 			if(r->NumBuffers==0)*out_raw_data_count += (tmpsize>>2);
 		break;
 
-		case 12:
+		/*case 12:
 			if(in_raw_data_insize < 6)return -4;
 			raw64_out[0] = svcContinueDebugEvent((Handle)raw64_in[0], (u32)raw64_in[1], raw64_in[2]);
 			*out_raw_data_count = 2;
-		break;
+		break;*/
 
 		case 13:
 			if(in_raw_data_insize < 2)return -4;
@@ -895,8 +895,15 @@ void process_usb_cmd(u32 *stop)
 void usb_handler(void* arg)
 {
 	u32 stop=0;
+	UsbCommsInterfaceInfo info = {
+		.bInterfaceClass = USB_CLASS_VENDOR_SPEC,
+		.bInterfaceSubClass = USB_CLASS_VENDOR_SPEC,
+		.bInterfaceProtocol = USB_CLASS_APPLICATION,
+	};
 
-	Result ret = usbCommsInitializeEx(&usb_interface, USB_CLASS_VENDOR_SPEC, USB_CLASS_VENDOR_SPEC, USB_CLASS_APPLICATION);
+	usb_interface = 0;
+
+	Result ret = usbCommsInitializeEx(1, &info);
 	if(R_FAILED(ret)) fatalSimple(ret);
 
 	while(1)
@@ -908,7 +915,7 @@ void usb_handler(void* arg)
 		}
 	}
 
-	usbCommsExitEx(usb_interface);
+	usbCommsExit();
 }
 
 void switch_sysmodule_usb_initialize()
