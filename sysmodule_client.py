@@ -1,6 +1,6 @@
 #!/usr/bin/env python2
 
-import termios, sys
+import sys
 
 import datetime
 import struct
@@ -9,6 +9,8 @@ import os
 # pyusb is required.
 import usb.core
 import usb.util
+
+import socket
 
 from util import p16, p32, u32, u64, hexdump, perm_to_str, c_str
 
@@ -48,7 +50,9 @@ class TransportCmd:
 
         msg = ''
 
+        msg += nxsm_auth # auth
         msg += struct.pack('<I', 0x4d53584e) # magic 'NXSM'
+        msg += struct.pack('<I', 1) # version
         msg += struct.pack('<I', len(self.rawdata)>>2) # raw_data_size
 
         types_data = ''
@@ -76,24 +80,46 @@ class TransportCmd:
                     c.write_device(self.buffers[i])
 
     def _recv_cmd(self, c, noprint=False):
-        msg = c.read_device(0x11c)
+        msg = c.read_device(0x140)
 
-        magic = struct.unpack('<I', msg[0x0:0x0+0x4])[0]
+        pos = 0x0
+        cursize = 0x20
+        msgauth = msg[pos:pos+cursize]
+        pos+= cursize
+        if msgauth != nxsm_auth:
+            raise Exception("TransportCmd: Recv-msg auth is invalid.")
+
+        cursize = 0x4
+        magic = struct.unpack('<I', msg[pos:pos+cursize])[0]
+        pos+= cursize
         if magic != 0x4d53584e:
             raise Exception("TransportCmd: Recv-msg magic is invalid: 0x%08x." % magic)
-        raw_data_size = struct.unpack('<I', msg[0x4:0x4+0x4])[0]
+        cursize = 0x4
+        version = struct.unpack('<I', msg[pos:pos+cursize])[0]
+        pos+= cursize
+        if version != 1:
+            raise Exception("TransportCmd: Recv-msg version is invalid: 0x%08x." % version)
+        cursize = 0x4
+        raw_data_size = struct.unpack('<I', msg[pos:pos+cursize])[0]
+        pos+= cursize
         if raw_data_size >= (0x100>>2):
             raise Exception("TransportCmd: Recv-msg raw_data_size is too large: 0x%x." % raw_data_size)
 
-        tmp_types = struct.unpack('<BBBB', msg[0x8:0x8+0x4])
-        tmp_sizes = struct.unpack('<IIII', msg[0xc:0xc+0x10])
+        cursize = 0x4
+        tmp_types = struct.unpack('<BBBB', msg[pos:pos+cursize])
+        pos+= cursize
+        cursize = 0x10
+        tmp_sizes = struct.unpack('<IIII', msg[pos:pos+cursize])
+        pos+= cursize
 
         for i in range(4):
             if i < len(self.buffer_types):
                 self.buffer_types[i] = tmp_types[i]
                 self.buffer_sizes[i] = tmp_sizes[i]
 
-        self.rawdata = msg[0x1c:0x1c+(raw_data_size<<2)]
+        cursize = raw_data_size<<2
+        self.rawdata = msg[pos:pos+cursize]
+        pos+= cursize
 
         if not noprint:
             print "Raw msg reply:"
@@ -120,7 +146,15 @@ class TransportCmd:
         }
 
 class Client():
-    def __init__(self, devicepath=""):
+    def __init__(self, servaddr=""):
+        if servaddr!="":
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.connect((servaddr, 56123))
+            self.sock_setup = True
+            return
+
+        self.sock_setup = False
+
         # find our device
         self.dev = usb.core.find(idVendor=0x057e, idProduct=0x3000)
 
@@ -160,16 +194,28 @@ class Client():
         #os.close(self.devicef)
 
     def read_device_partial(self, size):
-        tmp_data = self.ep_in.read(size)
+        if self.sock_setup:
+            tmp_data = self.sock.recv(size)
+            if not tmp_data:
+                return ''
+            return tmp_data
+
+        tmp_data = self.ep_in.read(size, 1000*10)
         tmp_data = ''.join([chr(x) for x in tmp_data])
         return tmp_data
 
     def read_device(self, size):
         data = ""
+
         while size != 0:
             #tmp_data = os.read(self.devicef, size)
-            tmp_data = self.ep_in.read(size)
-            tmp_data = ''.join([chr(x) for x in tmp_data])
+            if self.sock_setup:
+                tmp_data = self.sock.recv(size)
+                if not tmp_data or tmp_data=='':
+                    return ''
+            else:
+                tmp_data = self.ep_in.read(size, 1000*10)
+                tmp_data = ''.join([chr(x) for x in tmp_data])
             size -= len(tmp_data)
             data+= tmp_data
         return data
@@ -177,6 +223,11 @@ class Client():
     def write_device(self, data):
         size = len(data)
         tmplen = 0;
+
+        if self.sock_setup:
+            self.sock.sendall(data)
+            return
+
         while size != 0:
             #tmplen = os.write(self.devicef, data)
             tmplen = self.ep_out.write(data)
@@ -563,6 +614,22 @@ class Client():
     def fs_unlink(self, fspath):
         return self.transport_cmd_inbuf(32, "%s\0" % fspath)['rc']
 
+    def launch_hb(self, path='hax.nsp', titleid=0x0100133333370000, storageid=3, launchtitle=1):
+        lrh = self.getservice('lr')
+        lrh0 = self.cmd(lrh, 0, storageid)["handles"][0]
+
+        self.cmd_buf9(lrh0, 1, "@Sdcard:/%s\0" % path, 0x300, titleid)
+
+        self.svcCloseHandle(lrh)
+        self.svcCloseHandle(lrh0)
+
+        if launchtitle==1:
+            pmshell = self.getservice('pm:shell')
+            c.cmd(pmshell, 0, 0x31, titleid, storageid)
+            c.svcCloseHandle(pmshell)
+        c.svcCloseHandle(lrh)
+        c.svcCloseHandle(lrh0)
+
     # 'buf' params for input buffers are the actual python buffer data(not addrs), while for output buffers these are unused. Output buffers can be accessed via res['buffers'].
     def cmd(self, h, _id,
             a=0xFFFFFFFFFFFFFFFF, b=0xFFFFFFFFFFFFFFFF,
@@ -705,8 +772,10 @@ class Client():
 
     def cmd_buf5_buf6(self, h, _id, buf, size, buf2, size2,
             a=0xFFFFFFFFFFFFFFFF, b=0xFFFFFFFFFFFFFFFF,
-            c=0xFFFFFFFFFFFFFFFF):
+            c=0xFFFFFFFFFFFFFFFF, sendpid=False):
         cmd = IpcCmd(_id)
+        if sendpid==True:
+            cmd.send_pid()
         cmd.add_4_1(buf, size)
         cmd.add_4_2(buf2, size2)
         cmd.add_raw_64(a)
@@ -805,6 +874,15 @@ if __name__ == "__main__":
     import code
     print '== Switch sysmodule RPC Client =='
     print ''
-    c = Client()
+
+    servaddr = ''
+    if len(sys.argv) > 1:
+        servaddr = sys.argv[1]
+
+    c = Client(servaddr)
+    nxsm_auth = open('data/auth.bin', 'rb').read(0x20)
+    if len(nxsm_auth) != 0x20:
+        print "Invalid nxsm_auth size."
+        sys.exit(1)
     code.interact('', local=locals())
 

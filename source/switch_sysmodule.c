@@ -8,7 +8,16 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <errno.h>
+
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netdb.h>
+
 #include <switch.h>
+
+#include "auth_bin.h"
 
 extern u32 __start__;
 
@@ -16,7 +25,7 @@ extern u32 __start__;
 
 u32 __nx_applet_type = AppletType_None;
 
-#define INNER_HEAP_SIZE 0x200000
+#define INNER_HEAP_SIZE 0x400000
 size_t nx_inner_heap_size = INNER_HEAP_SIZE;
 char   nx_inner_heap[INNER_HEAP_SIZE];
 
@@ -40,8 +49,15 @@ FILE *fcmdlog;
 
 static u32 usb_interface=0;
 
+int sock_listenfd = -1, sock_datafd = -1;
+
+#define NXSM_MAGIC 0x4d53584e
+#define NXSM_VERSION 1
+
 typedef struct {
+	u8 auth[0x20];
 	u32 magic;//0x4d53584e 'NXSM'
+	u32 version;
 	u32 raw_data_size;
 	u8 buffer_types[4];//0 = from host, 1 = to host.
 	u32 buffer_sizes[4];//Sizes for buffer data sent from/to the host.
@@ -776,15 +792,52 @@ Result process_usb(IpcParsedCommand *r, u32 *rawdata, u32 *raw_data_size, u32 cm
 	return ret;
 }
 
+static void close_socket(int *socket)
+{
+	if(*socket < 0)return;
+
+	close(*socket);
+	*socket = -1;
+}
+
 size_t transport_safe_read(void* buffer, size_t size)
 {
 	u8 *bufptr = buffer;
 	size_t cursize=size;
-	size_t tmpsize=0;
+	int tmpsize=0;
 
 	while(cursize)
 	{
-		tmpsize = usbCommsReadEx(bufptr, cursize, usb_interface);
+		if(sock_datafd < 0)
+		{
+			tmpsize = usbCommsReadEx(bufptr, cursize, usb_interface);
+		}
+		else
+		{
+			tmpsize = recv(sock_datafd, buffer, cursize, 0);
+		}
+
+		if(sock_datafd >= 0)
+		{
+			if(tmpsize==0)
+			{
+				close_socket(&sock_datafd);
+				return 0;
+			}
+			else if(tmpsize==-1)
+			{
+				if(errno != EWOULDBLOCK && errno != EAGAIN)
+				{
+					close_socket(&sock_datafd);
+					return 0;
+				}
+				else//blocking
+				{
+					continue;
+				}
+			}
+		}
+
 		bufptr+= tmpsize;
 		cursize-= tmpsize;
 	}
@@ -796,11 +849,40 @@ size_t transport_safe_write(void* buffer, size_t size)
 {
 	u8 *bufptr = buffer;
 	size_t cursize=size;
-	size_t tmpsize=0;
+	int tmpsize=0;
 
 	while(cursize)
 	{
-		tmpsize = usbCommsWriteEx(bufptr, cursize, usb_interface);
+		if(sock_datafd < 0)
+		{
+			tmpsize = usbCommsWriteEx(bufptr, cursize, usb_interface);
+		}
+		else
+		{
+			tmpsize = send(sock_datafd, buffer, cursize, 0);
+		}
+
+		if(sock_datafd >= 0)
+		{
+			if(tmpsize==0)
+			{
+				close_socket(&sock_datafd);
+				return 0;
+			}
+			else if(tmpsize==-1)
+			{
+				if(errno != EWOULDBLOCK && errno != EAGAIN)
+				{
+					close_socket(&sock_datafd);
+					return 0;
+				}
+				else//blocking
+				{
+					continue;
+				}
+			}
+		}
+
 		bufptr+= tmpsize;
 		cursize-= tmpsize;
 	}
@@ -808,11 +890,12 @@ size_t transport_safe_write(void* buffer, size_t size)
 	return size;
 }
 
-void process_usb_cmd(u32 *stop)
+void process_rpc_cmd(u32 *stop)
 {
 	Result ret=0;
 	u32 pos;
 	size_t tmp_size=0;
+	bool auth_valid = 1;
 
 	transport_msg msg;
 
@@ -825,7 +908,17 @@ void process_usb_cmd(u32 *stop)
 
 	tmp_size = transport_safe_read(&msg, sizeof(msg));
 	if(tmp_size != sizeof(msg))return;
-	if(msg.magic != 0x4d53584e)return;
+	if(sizeof(msg.auth) != sizeof(msg.auth))return;
+
+	//safe memcmp
+	for(pos=0; pos<sizeof(msg.auth); pos++)
+	{
+		auth_valid &= (msg.auth[pos] == auth_bin[pos]);
+	}
+
+	if(!auth_valid)return;
+	if(msg.magic != NXSM_MAGIC)return;
+	if(msg.version != NXSM_VERSION)return;
 
 	for(pos=0; pos<4; pos++)
 	{
@@ -892,9 +985,11 @@ void process_usb_cmd(u32 *stop)
 	}
 }
 
-void usb_handler(void* arg)
+void rpc_handler(void* arg)
 {
 	u32 stop=0;
+	Result ret=0;
+	#ifndef DISABLE_USB
 	UsbCommsInterfaceInfo info = {
 		.bInterfaceClass = USB_CLASS_VENDOR_SPEC,
 		.bInterfaceSubClass = USB_CLASS_VENDOR_SPEC,
@@ -903,30 +998,80 @@ void usb_handler(void* arg)
 
 	usb_interface = 0;
 
-	Result ret = usbCommsInitializeEx(1, &info);
+	ret = usbCommsInitializeEx(1, &info);
 	if(R_FAILED(ret)) fatalSimple(ret);
+	#endif
+
+        sock_listenfd = -1;
+        sock_datafd = -1;
+
+	#ifdef DISABLE_USB
+	ret = socketInitializeDefault();
+
+	struct sockaddr_in serv_addr;
+
+	memset(&serv_addr, 0, sizeof(serv_addr));
+	serv_addr.sin_family = AF_INET;
+	serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	serv_addr.sin_port = htons(56123);
+
+	if(R_SUCCEEDED(ret))
+	{
+		sock_listenfd = socket(AF_INET, SOCK_STREAM, 0);
+
+		if(sock_listenfd >= 0)
+		{
+			int rc = bind(sock_listenfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+			if(rc == 0)rc = listen(sock_listenfd, 1);
+			if(rc != 0)
+			{
+				close(sock_listenfd);
+				sock_listenfd = -1;
+			}
+		}
+	}
+	#endif
 
 	while(1)
 	{
-		process_usb_cmd(&stop);
+		#ifdef DISABLE_USB
+		if(sock_listenfd >= 0)
+		{
+			if(sock_datafd < 0)sock_datafd = accept(sock_listenfd, NULL, NULL);
+		}
+
+		if(sock_datafd < 0)
+		{
+			continue;
+		}
+		#endif
+
+		process_rpc_cmd(&stop);
 		if(stop & 0x1)
 		{
 			while(1)svcSleepThread(1000000000);
 		}
 	}
 
+	close_socket(&sock_datafd);
+	close_socket(&sock_listenfd);
+
+	socketExit();
+
+	#ifndef DISABLE_USB
 	usbCommsExit();
+	#endif
 }
 
-void switch_sysmodule_usb_initialize()
+void switch_sysmodule_rpc_initialize()
 {
 	Result ret=0;
-	static Thread usb_thread;
+	static Thread rpc_thread;
 
-	ret = threadCreate(&usb_thread, usb_handler, 0, 0x4000, 28, -2);
+	ret = threadCreate(&rpc_thread, rpc_handler, 0, 0x4000, 28, -2);
 	if (R_FAILED(ret)) fatalSimple(ret);
 
-	ret = threadStart(&usb_thread);
+	ret = threadStart(&rpc_thread);
 	if (R_FAILED(ret)) fatalSimple(ret);
 }
 
@@ -943,7 +1088,7 @@ Result ipc_handler()
 
 	handlecount = server_handles;
 
-	switch_sysmodule_usb_initialize();
+	switch_sysmodule_rpc_initialize();
 
 	#ifdef DISABLE_IPC
 	while(1)svcSleepThread(1000000000);
