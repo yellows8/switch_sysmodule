@@ -870,6 +870,11 @@ class Client():
         cmd.add_raw_64(d)
         return cmd.execute(self, h)
 
+nxsm_auth = open('data/auth.bin', 'rb').read(0x20)
+if len(nxsm_auth) != 0x20:
+    print "Invalid nxsm_auth size."
+    sys.exit(1)
+
 if __name__ == "__main__":
     import code
     print '== Switch sysmodule RPC Client =='
@@ -880,9 +885,5 @@ if __name__ == "__main__":
         servaddr = sys.argv[1]
 
     c = Client(servaddr)
-    nxsm_auth = open('data/auth.bin', 'rb').read(0x20)
-    if len(nxsm_auth) != 0x20:
-        print "Invalid nxsm_auth size."
-        sys.exit(1)
     code.interact('', local=locals())
 
