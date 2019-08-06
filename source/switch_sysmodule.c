@@ -25,7 +25,7 @@ extern u32 __start__;
 
 u32 __nx_applet_type = AppletType_None;
 
-#define INNER_HEAP_SIZE 0x400000
+#define INNER_HEAP_SIZE 0x300000
 size_t nx_inner_heap_size = INNER_HEAP_SIZE;
 char   nx_inner_heap[INNER_HEAP_SIZE];
 
@@ -735,6 +735,24 @@ Result process_ipc_cmds(IpcParsedCommand *r, u32 *cmdbuf, u32 session_type, u32 
 		case 32:
 			if(r->NumBuffers==0)return -4;
 			return unlink(r->Buffers[0]);
+		break;
+
+		case 34:
+			if(in_raw_data_insize < 4)return -4;
+
+			if(r->NumBuffers)
+			{
+				ptr = r->Buffers[0];
+				tmpsize = r->BufferSizes[0];
+			}
+			else
+			{
+				return -4;
+			}
+
+			raw64_out[0] = svcWriteDebugProcessMemory((Handle)raw64_in[0], ptr, raw64_in[1], tmpsize);
+
+			*out_raw_data_count = 2;
 		break;
 	}
 

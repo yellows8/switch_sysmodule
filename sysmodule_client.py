@@ -267,6 +267,12 @@ class Client():
         cmd.add_raw_64(f)
         return cmd.execute(self, noprint)
 
+    def transport_cmd_inbuf_noprint(self, _id, buf,
+            a=0xFFFFFFFFFFFFFFFF, b=0xFFFFFFFFFFFFFFFF,
+            c=0xFFFFFFFFFFFFFFFF, d=0xFFFFFFFFFFFFFFFF,
+            e=0xFFFFFFFFFFFFFFFF, f=0xFFFFFFFFFFFFFFFF):
+        return self.transport_cmd_inbuf(_id, buf, a, b, c, d, e, f, True)
+
     def transport_cmd_outbuf(self, _id, size,
             a=0xFFFFFFFFFFFFFFFF, b=0xFFFFFFFFFFFFFFFF,
             c=0xFFFFFFFFFFFFFFFF, d=0xFFFFFFFFFFFFFFFF,
@@ -386,6 +392,15 @@ class Client():
             raise Exception("svcReadDebugProcessMemory failed: 0x%x" % ret)
         return res['buffers'][0]
 
+    def debug_writemem(self, debughandle, addr, data):
+        res = self.transport_cmd_inbuf_noprint(34, data, debughandle, addr)
+        if res['rc'] != 0:
+            raise Exception("Cmd failed: 0x%x" % res['rc'])
+        ret = struct.unpack('<I', res['raw'][0x0:0x0+0x4])[0]
+        if ret != 0:
+            raise Exception("svcWriteDebugProcessMemory failed: 0x%x" % ret)
+        return 0
+
     def debug_pid_maps(self, pid):
         debughandle = self.debug_process(pid)
         self.debug_maps(debughandle)
@@ -398,6 +413,14 @@ class Client():
         finally:
             self.svcCloseHandle(debughandle)
         return data
+
+    def debug_pid_writemem(self, pid, addr, data):
+        debughandle = self.debug_process(pid)
+        try:
+            out = self.debug_writemem(debughandle, addr, data)
+        finally:
+            self.svcCloseHandle(debughandle)
+        return out
 
     def debug_pid_readmem_dumpfile(self, pid, addr, size, filepath, chunksize=0x100000):
         tmpf = open(filepath, 'wb')
@@ -702,6 +725,19 @@ class Client():
         cmd.add_raw_64(d)
         cmd.add_raw_64(e)
         return cmd.execute(self, h)
+
+    def cmd_buf46_raw5(self, h, _id, buf, size,
+            a=0xFFFFFFFFFFFFFFFF, b=0xFFFFFFFFFFFFFFFF,
+            c=0xFFFFFFFFFFFFFFFF, d=0xFFFFFFFFFFFFFFFF,
+            e=0xFFFFFFFFFFFFFFFF, fast=False):
+        cmd = IpcCmd(_id)
+        cmd.add_40_4_2(buf, size)
+        cmd.add_raw_64(a)
+        cmd.add_raw_64(b)
+        cmd.add_raw_64(c)
+        cmd.add_raw_64(d)
+        cmd.add_raw_64(e)
+        return cmd.execute(self, h, fast)
 
     def cmd_buf86(self, h, _id, buf, size,
             a=0xFFFFFFFFFFFFFFFF, b=0xFFFFFFFFFFFFFFFF,
