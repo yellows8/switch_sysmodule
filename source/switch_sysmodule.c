@@ -624,7 +624,7 @@ Result process_ipc_cmds(IpcParsedCommand *r, u32 *cmdbuf, u32 session_type, u32 
 			ret = accountInitialize();
 			if(R_FAILED(ret)) return ret;
 
-			ret = accountGetActiveUser((u128*)&raw64_out[0], (bool*)&raw64_out[2]);
+			ret = accountGetLastOpenedUser((u128*)&raw64_out[0], (bool*)&raw64_out[2]);
 			if(R_SUCCEEDED(ret))*out_raw_data_count = 6;
 			accountExit();
 			return ret;
