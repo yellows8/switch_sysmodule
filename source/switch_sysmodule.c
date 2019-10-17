@@ -255,7 +255,7 @@ Result process_ipc_cmds(IpcParsedCommand *r, u32 *cmdbuf, u32 session_type, u32 
 				svcGetProcessId(&raw64_in[0], CUR_PROCESS_HANDLE);
 			}
 
-			ipcDispatch(nvdrv_service.handle);
+			ipcDispatch(nvdrv_service.session);
 			if(!skiplog)log_command(r, session_type, 1);
 
 			if(cmdid==3 && r->NumHandles>=2)
@@ -285,7 +285,7 @@ Result process_ipc_cmds(IpcParsedCommand *r, u32 *cmdbuf, u32 session_type, u32 
 				{
 					//log_command(r, session_type, 0);
 					//ipcDispatch(viGetSessionService());
-					log_command(r, session_type | (ipcDispatch(viGetSession_IApplicationDisplayService()->handle)<<8), 1);
+					log_command(r, session_type | (ipcDispatch(viGetSession_IApplicationDisplayService()->session)<<8), 1);
 					return 0;
 				}
 
@@ -318,11 +318,11 @@ Result process_ipc_cmds(IpcParsedCommand *r, u32 *cmdbuf, u32 session_type, u32 
 		}
 		else if(session_type==2 && cmdid!=100)
 		{
-			ipcDispatch(viGetSession_IApplicationDisplayService()->handle);
+			ipcDispatch(viGetSession_IApplicationDisplayService()->session);
 		}
 		else if(session_type==3)
 		{
-			ipcDispatch(viGetSession_IHOSBinderDriverRelay()->handle);
+			ipcDispatch(viGetSession_IHOSBinderDriverRelay()->session);
 		}
 
 		log_command(r, session_type, 1);
@@ -549,13 +549,13 @@ Result process_ipc_cmds(IpcParsedCommand *r, u32 *cmdbuf, u32 session_type, u32 
 
 		case 16:
 			ret = smGetService(&tmpserv, (char*)in_raw_data);
-			if (R_SUCCEEDED(ret)) out_raw_data[0] = tmpserv.handle;
+			if (R_SUCCEEDED(ret)) out_raw_data[0] = tmpserv.session;
 			if (R_SUCCEEDED(ret)) *out_raw_data_count = 1;
 			return ret;
 		break;
 
 		case 17:
-			out_raw_data[0] = fsGetServiceSession()->handle;
+			out_raw_data[0] = fsGetServiceSession()->session;
 			*out_raw_data_count = 1;
 			return 0;
 		break;
@@ -624,7 +624,7 @@ Result process_ipc_cmds(IpcParsedCommand *r, u32 *cmdbuf, u32 session_type, u32 
 			ret = accountInitialize();
 			if(R_FAILED(ret)) return ret;
 
-			ret = accountGetLastOpenedUser((u128*)&raw64_out[0], (bool*)&raw64_out[2]);
+			ret = accountGetLastOpenedUser((AccountUid*)&raw64_out[0]);
 			if(R_SUCCEEDED(ret))*out_raw_data_count = 6;
 			accountExit();
 			return ret;
@@ -636,7 +636,7 @@ Result process_ipc_cmds(IpcParsedCommand *r, u32 *cmdbuf, u32 session_type, u32 
 
 			if(raw64_in[3]==0)
 			{
-				ret = fsMount_SaveData(&tmpfs, raw64_in[0], *((u128*)&raw64_in[1]));
+				ret = fsMount_SaveData(&tmpfs, raw64_in[0], (AccountUid*)&raw64_in[1]);
 			}
 			else
 			{
